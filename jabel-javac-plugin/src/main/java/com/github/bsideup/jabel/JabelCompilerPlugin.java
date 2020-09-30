@@ -83,15 +83,19 @@ public class JabelCompilerPlugin implements Plugin {
             throw new RuntimeException(e);
         }
 
-        System.out.println(
+        if(Arrays.stream(args).anyMatch(p -> p.equals("printFeatures"))){
+            System.out.println(
                 ENABLED_FEATURES.stream()
-                        .map(Enum::name)
-                        .collect(Collectors.joining(
-                                "\n\t- ",
-                                "Jabel: initialized. Enabled features: \n\t- ",
-                                "\n"
-                        ))
-        );
+                .map(Enum::name)
+                .collect(Collectors.joining(
+                "\n\t- ",
+                "Jabel: initialized. Enabled features: \n\t- ",
+                "\n"
+                ))
+            );
+        }
+
+        System.out.println(Arrays.toString(args));
     }
 
     @Override
