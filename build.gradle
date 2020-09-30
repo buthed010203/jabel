@@ -1,22 +1,38 @@
-subprojects {
-    apply from: "$rootDir/gradle/publishing.gradle"
+plugins {
+    id "java"
+    id "maven-publish"
+}
 
-    group = 'com.github.bsideup.jabel'
-    repositories {
-        jcenter()
-    }
+group = 'com.github.Anuken'
 
-    plugins.withType(MavenPublishPlugin) {
-        project.publishing {
-            repositories {
-                maven {
-                    url System.getenv('GRADLE_PUBLISH_REPO_URL')
-                    credentials {
-                        username = System.getenv('GRADLE_PUBLISH_MAVEN_USER')
-                        password = System.getenv('GRADLE_PUBLISH_MAVEN_PASSWORD')
-                    }
-                }
-            }
+sourceCompatibility = targetCompatibility = 8
+
+dependencies {
+    compile 'net.bytebuddy:byte-buddy:1.10.16'
+    compile 'net.bytebuddy:byte-buddy-agent:1.10.16'
+}
+
+
+task sourcesJar(type: Jar) {
+    classifier 'sources'
+    from sourceSets.main.allJava
+}
+
+javadoc {
+    options.source = "8"
+}
+
+task javadocJar(type: Jar) {
+    from javadoc
+    classifier = 'javadoc'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) { publication ->
+            from components.java
+            artifact sourcesJar
+            artifact javadocJar
         }
     }
 }
