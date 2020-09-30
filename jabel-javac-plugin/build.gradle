@@ -3,6 +3,8 @@ plugins {
     id "maven-publish"
 }
 
+group = 'com.github.Anuken'
+
 sourceCompatibility = targetCompatibility = 8
 
 dependencies {
