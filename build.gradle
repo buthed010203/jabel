@@ -7,6 +7,10 @@ group = 'com.github.Anuken'
 
 sourceCompatibility = targetCompatibility = 8
 
+repositories {
+    jcenter()
+}
+
 dependencies {
     compile 'net.bytebuddy:byte-buddy:1.10.16'
     compile 'net.bytebuddy:byte-buddy-agent:1.10.16'
