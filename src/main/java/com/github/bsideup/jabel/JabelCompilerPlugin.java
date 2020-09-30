@@ -94,8 +94,6 @@ public class JabelCompilerPlugin implements Plugin {
                 ))
             );
         }
-
-        System.out.println(Arrays.toString(args));
     }
 
     @Override
