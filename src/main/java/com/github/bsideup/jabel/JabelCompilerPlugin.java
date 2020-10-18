@@ -1,108 +1,125 @@
 package com.github.bsideup.jabel;
 
-import com.sun.source.util.JavacTask;
-import com.sun.source.util.Plugin;
-import com.sun.tools.javac.code.Source;
-import com.sun.tools.javac.parser.JavaTokenizer;
-import com.sun.tools.javac.parser.JavacParser;
-import net.bytebuddy.ByteBuddy;
-import net.bytebuddy.agent.ByteBuddyAgent;
-import net.bytebuddy.asm.Advice;
-import net.bytebuddy.dynamic.loading.ClassReloadingStrategy;
+import com.sun.source.util.*;
+import com.sun.tools.javac.code.*;
+import com.sun.tools.javac.parser.*;
+import net.bytebuddy.*;
+import net.bytebuddy.agent.*;
+import net.bytebuddy.asm.*;
+import net.bytebuddy.dynamic.loading.*;
 
-import java.lang.reflect.Field;
-import java.util.Arrays;
-import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.lang.reflect.*;
+import java.util.*;
+import java.util.stream.*;
 
-import static net.bytebuddy.matcher.ElementMatchers.named;
-import static net.bytebuddy.matcher.ElementMatchers.takesArguments;
+import static net.bytebuddy.matcher.ElementMatchers.*;
+import sun.misc.Unsafe;
 
-public class JabelCompilerPlugin implements Plugin {
+public class JabelCompilerPlugin implements Plugin{
 
-    static final Set<Source.Feature> ENABLED_FEATURES = Stream
-            .of(
-                    "PRIVATE_SAFE_VARARGS",
+    static final Set<Source.Feature> ENABLED_FEATURES = Stream.of(
+        "PRIVATE_SAFE_VARARGS",
 
-                    "SWITCH_EXPRESSION",
-                    "SWITCH_RULE",
-                    "SWITCH_MULTIPLE_CASE_LABELS",
+        "SWITCH_EXPRESSION",
+        "SWITCH_RULE",
+        "SWITCH_MULTIPLE_CASE_LABELS",
 
-                    "LOCAL_VARIABLE_TYPE_INFERENCE",
-                    "VAR_SYNTAX_IMPLICIT_LAMBDAS",
+        "LOCAL_VARIABLE_TYPE_INFERENCE",
+        "VAR_SYNTAX_IMPLICIT_LAMBDAS",
 
-                    "DIAMOND_WITH_ANONYMOUS_CLASS_CREATION",
+        "DIAMOND_WITH_ANONYMOUS_CLASS_CREATION",
 
-                    "EFFECTIVELY_FINAL_VARIABLES_IN_TRY_WITH_RESOURCES",
+        "EFFECTIVELY_FINAL_VARIABLES_IN_TRY_WITH_RESOURCES",
 
-                    "TEXT_BLOCKS",
+        "TEXT_BLOCKS",
 
-                    "PATTERN_MATCHING_IN_INSTANCEOF",
-                    "REIFIABLE_TYPES_INSTANCEOF"
-            )
-            .map(name -> {
-                try {
-                    return Source.Feature.valueOf(name);
-                } catch (IllegalArgumentException e) {
-                    return null;
-                }
-            })
-            .filter(Objects::nonNull)
-            .collect(Collectors.toSet());
+        "PATTERN_MATCHING_IN_INSTANCEOF",
+        "REIFIABLE_TYPES_INSTANCEOF"
+    ).map(name -> {
+        try{
+            return Source.Feature.valueOf(name);
+        }catch(IllegalArgumentException e){
+            return null;
+        }
+    })
+    .filter(Objects::nonNull)
+    .collect(Collectors.toSet());
+
+    static Unsafe unsafe = null;
+
+    //Disable Java 9 warnings re "An illegal reflective access operation has occurred"
+    //code taken from Manifold
+    static void disableJava9IllegalAccessWarning(ClassLoader cl){
+        try{
+            Class cls = Class.forName("jdk.internal.module.IllegalAccessLogger", false, cl);
+            Field logger = cls.getDeclaredField("logger");
+            getUnsafe().putObjectVolatile(cls, getUnsafe().staticFieldOffset(logger), null);
+        }catch(Throwable ignore){}
+    }
+
+    static Unsafe getUnsafe(){
+        if(unsafe != null) return unsafe;
+
+        try{
+            Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+            theUnsafe.setAccessible(true);
+            return unsafe = (Unsafe)theUnsafe.get(null);
+        }catch(Throwable t){
+            throw new RuntimeException("The 'Unsafe' class is not accessible");
+        }
+    }
 
     @Override
-    public void init(JavacTask task, String... args) {
+    public void init(JavacTask task, String... args){
+        //runtime
+        disableJava9IllegalAccessWarning(JabelCompilerPlugin.class.getClassLoader());
+        //compile-time
+        disableJava9IllegalAccessWarning(Thread.currentThread().getContextClassLoader());
+
         ByteBuddyAgent.install();
 
         ByteBuddy byteBuddy = new ByteBuddy();
 
-        for (Class<?> clazz : Arrays.asList(JavacParser.class, JavaTokenizer.class)) {
+        for(Class<?> clazz : Arrays.asList(JavacParser.class, JavaTokenizer.class)){
             byteBuddy
-                    .redefine(clazz)
-                    .visit(
-                            Advice.to(CheckSourceLevelAdvice.class)
-                                    .on(named("checkSourceLevel").and(takesArguments(2)))
-                    )
-                    .make()
-                    .load(clazz.getClassLoader(), ClassReloadingStrategy.fromInstalledAgent());
+            .redefine(clazz)
+            .visit(
+            Advice.to(CheckSourceLevelAdvice.class)
+            .on(named("checkSourceLevel").and(takesArguments(2)))
+            )
+            .make()
+            .load(clazz.getClassLoader(), ClassReloadingStrategy.fromInstalledAgent());
         }
 
-        try {
+        try{
             Field field = Source.Feature.class.getDeclaredField("minLevel");
             field.setAccessible(true);
 
-            for (Source.Feature feature : ENABLED_FEATURES) {
+            for(Source.Feature feature : ENABLED_FEATURES){
                 field.set(feature, Source.JDK8);
-                if (!feature.allowedInSource(Source.JDK8)) {
+                if(!feature.allowedInSource(Source.JDK8)){
                     throw new IllegalStateException(feature.name() + " minLevel instrumentation failed!");
                 }
             }
-        } catch (Exception e) {
+        }catch(Exception e){
             throw new RuntimeException(e);
         }
 
-        if(Arrays.stream(args).anyMatch(p -> p.equals("printFeatures"))){
+        if(Arrays.asList(args).contains("printFeatures")){
             System.out.println(
-                ENABLED_FEATURES.stream()
-                .map(Enum::name)
-                .collect(Collectors.joining(
-                "\n\t- ",
-                "Jabel: initialized. Enabled features: \n\t- ",
-                "\n"
-                ))
-            );
+            ENABLED_FEATURES.stream()
+            .map(Enum::name)
+            .collect(Collectors.joining("\n\t- ", "Jabel: initialized. Enabled features: \n\t- ", "\n")));
         }
     }
 
     @Override
-    public String getName() {
+    public String getName(){
         return "jabel";
     }
 
     // Make it auto start on Java 14+
-    public boolean autoStart() {
+    public boolean autoStart(){
         return true;
     }
 }
