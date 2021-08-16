@@ -8,12 +8,13 @@ group = 'com.github.Anuken'
 sourceCompatibility = targetCompatibility = 8
 
 repositories {
-    jcenter()
+    mavenCentral()
 }
 
 dependencies {
-    compile 'net.bytebuddy:byte-buddy:1.10.16'
-    compile 'net.bytebuddy:byte-buddy-agent:1.10.16'
+    implementation 'net.bytebuddy:byte-buddy:1.11.12'
+    implementation 'net.bytebuddy:byte-buddy-agent:1.11.12'
+    implementation 'net.java.dev.jna:jna:5.8.0'
 }
 
 

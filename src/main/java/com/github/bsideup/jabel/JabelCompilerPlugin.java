@@ -1,116 +1,128 @@
 package com.github.bsideup.jabel;
 
 import com.sun.source.util.*;
+import com.sun.tools.javac.api.*;
 import com.sun.tools.javac.code.*;
-import com.sun.tools.javac.parser.*;
+import com.sun.tools.javac.util.*;
 import net.bytebuddy.*;
 import net.bytebuddy.agent.*;
 import net.bytebuddy.asm.*;
+import net.bytebuddy.dynamic.*;
 import net.bytebuddy.dynamic.loading.*;
+import net.bytebuddy.implementation.bytecode.*;
+import net.bytebuddy.implementation.bytecode.constant.*;
+import net.bytebuddy.pool.*;
+import net.bytebuddy.utility.*;
 
-import java.lang.reflect.*;
 import java.util.*;
-import java.util.stream.*;
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
-import sun.misc.Unsafe;
 
 public class JabelCompilerPlugin implements Plugin{
+    static{
+        Map<String, AsmVisitorWrapper> visitors = new HashMap<String, AsmVisitorWrapper>(){{
+            // Disable the preview feature check
+            AsmVisitorWrapper checkSourceLevelAdvice = Advice.to(CheckSourceLevelAdvice.class)
+            .on(named("checkSourceLevel").and(takesArguments(2)));
 
-    static final Set<Source.Feature> ENABLED_FEATURES = Stream.of(
-        "PRIVATE_SAFE_VARARGS",
+            // Allow features that were introduced together with Records (local enums, static inner members, ...)
+            AsmVisitorWrapper allowRecordsEraFeaturesAdvice = MemberSubstitution.relaxed()
+            .field(named("allowRecords"))
+            .onRead()
+            .replaceWith(
+            (instrumentedType, instrumentedMethod, typePool) ->
+            (targetType, target, parameters, result, freeOffset) ->
+            new StackManipulation.Compound(
+            // remove aload_0
+            Removal.of(targetType),
+            IntegerConstant.forValue(true)
+            )
+            )
+            .on(any());
 
-        "SWITCH_EXPRESSION",
-        "SWITCH_RULE",
-        "SWITCH_MULTIPLE_CASE_LABELS",
+            put("com.sun.tools.javac.parser.JavacParser",
+            new AsmVisitorWrapper.Compound(
+            checkSourceLevelAdvice,
+            allowRecordsEraFeaturesAdvice
+            )
+            );
+            put("com.sun.tools.javac.parser.JavaTokenizer", checkSourceLevelAdvice);
 
-        "LOCAL_VARIABLE_TYPE_INFERENCE",
-        "VAR_SYNTAX_IMPLICIT_LAMBDAS",
+            put("com.sun.tools.javac.comp.Check", allowRecordsEraFeaturesAdvice);
+            put("com.sun.tools.javac.comp.Attr", allowRecordsEraFeaturesAdvice);
+            put("com.sun.tools.javac.comp.Resolve", allowRecordsEraFeaturesAdvice);
 
-        "DIAMOND_WITH_ANONYMOUS_CLASS_CREATION",
+            // Lower the source requirement for supported features
+            put(
+            "com.sun.tools.javac.code.Source$Feature",
+            Advice.to(AllowedInSourceAdvice.class)
+            .on(named("allowedInSource").and(takesArguments(1)))
+            );
+        }};
 
-        "EFFECTIVELY_FINAL_VARIABLES_IN_TRY_WITH_RESOURCES",
-
-        "TEXT_BLOCKS",
-
-        "PATTERN_MATCHING_IN_INSTANCEOF",
-        "REIFIABLE_TYPES_INSTANCEOF"
-    ).map(name -> {
         try{
-            return Source.Feature.valueOf(name);
-        }catch(IllegalArgumentException e){
-            return null;
+            ByteBuddyAgent.install();
+        }catch(Exception e){
+            ByteBuddyAgent.install(
+                new ByteBuddyAgent.AttachmentProvider.Compound(
+                    ByteBuddyAgent.AttachmentProvider.ForJ9Vm.INSTANCE,
+                    ByteBuddyAgent.AttachmentProvider.ForStandardToolsJarVm.JVM_ROOT,
+                    ByteBuddyAgent.AttachmentProvider.ForStandardToolsJarVm.JDK_ROOT,
+                    ByteBuddyAgent.AttachmentProvider.ForStandardToolsJarVm.MACINTOSH,
+                    ByteBuddyAgent.AttachmentProvider.ForUserDefinedToolsJar.INSTANCE,
+                    ByteBuddyAgent.AttachmentProvider.ForEmulatedAttachment.INSTANCE
+                )
+            );
         }
-    })
-    .filter(Objects::nonNull)
-    .collect(Collectors.toSet());
 
-    static Unsafe unsafe = null;
+        ByteBuddy byteBuddy = new ByteBuddy();
 
-    //Disable Java 9 warnings re "An illegal reflective access operation has occurred"
-    //code taken from Manifold
-    static void disableJava9IllegalAccessWarning(ClassLoader cl){
-        try{
-            Class cls = Class.forName("jdk.internal.module.IllegalAccessLogger", false, cl);
-            Field logger = cls.getDeclaredField("logger");
-            getUnsafe().putObjectVolatile(cls, getUnsafe().staticFieldOffset(logger), null);
-        }catch(Throwable ignore){}
-    }
+        ClassLoader classLoader = JavacTask.class.getClassLoader();
+        ClassFileLocator classFileLocator = ClassFileLocator.ForClassLoader.of(classLoader);
+        TypePool typePool = TypePool.ClassLoading.of(classLoader);
 
-    static Unsafe getUnsafe(){
-        if(unsafe != null) return unsafe;
+        visitors.forEach((className, visitor) -> {
+            byteBuddy
+            .redefine(
+            typePool.describe(className).resolve(),
+            classFileLocator
+            )
+            .visit(visitor)
+            .make()
+            .load(classLoader, ClassReloadingStrategy.fromInstalledAgent());
+        });
 
-        try{
-            Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
-            theUnsafe.setAccessible(true);
-            return unsafe = (Unsafe)theUnsafe.get(null);
-        }catch(Throwable t){
-            throw new RuntimeException("The 'Unsafe' class is not accessible");
-        }
+        JavaModule jabelModule = JavaModule.ofType(JabelCompilerPlugin.class);
+        ClassInjector.UsingInstrumentation.redefineModule(
+        ByteBuddyAgent.getInstrumentation(),
+        JavaModule.ofType(JavacTask.class),
+        Collections.emptySet(),
+        Collections.emptyMap(),
+        new HashMap<String, Set<JavaModule>>(){{
+            put("com.sun.tools.javac.api", Collections.singleton(jabelModule));
+            put("com.sun.tools.javac.tree", Collections.singleton(jabelModule));
+            put("com.sun.tools.javac.code", Collections.singleton(jabelModule));
+            put("com.sun.tools.javac.util", Collections.singleton(jabelModule));
+        }},
+        Collections.emptySet(),
+        Collections.emptyMap()
+        );
     }
 
     @Override
     public void init(JavacTask task, String... args){
-        //runtime
-        disableJava9IllegalAccessWarning(JabelCompilerPlugin.class.getClassLoader());
-        //compile-time
-        disableJava9IllegalAccessWarning(Thread.currentThread().getContextClassLoader());
-
-        ByteBuddyAgent.install();
-
-        ByteBuddy byteBuddy = new ByteBuddy();
-
-        for(Class<?> clazz : Arrays.asList(JavacParser.class, JavaTokenizer.class)){
-            byteBuddy
-            .redefine(clazz)
-            .visit(
-            Advice.to(CheckSourceLevelAdvice.class)
-            .on(named("checkSourceLevel").and(takesArguments(2)))
-            )
-            .make()
-            .load(clazz.getClassLoader(), ClassReloadingStrategy.fromInstalledAgent());
-        }
-
-        try{
-            Field field = Source.Feature.class.getDeclaredField("minLevel");
-            field.setAccessible(true);
-
-            for(Source.Feature feature : ENABLED_FEATURES){
-                field.set(feature, Source.JDK8);
-                if(!feature.allowedInSource(Source.JDK8)){
-                    throw new IllegalStateException(feature.name() + " minLevel instrumentation failed!");
-                }
+        Context context = ((JavacTaskImpl)task).getContext();
+        JavacMessages.instance(context).add(locale -> new ResourceBundle(){
+            @Override
+            protected Object handleGetObject(String key){
+                return "{0}";
             }
-        }catch(Exception e){
-            throw new RuntimeException(e);
-        }
 
-        if(Arrays.asList(args).contains("printFeatures")){
-            System.out.println(
-            ENABLED_FEATURES.stream()
-            .map(Enum::name)
-            .collect(Collectors.joining("\n\t- ", "Jabel: initialized. Enabled features: \n\t- ", "\n")));
-        }
+            @Override
+            public Enumeration<String> getKeys(){
+                return Collections.enumeration(Arrays.asList("missing.desugar.on.record"));
+            }
+        });
     }
 
     @Override
@@ -119,7 +131,49 @@ public class JabelCompilerPlugin implements Plugin{
     }
 
     // Make it auto start on Java 14+
+    @Override
     public boolean autoStart(){
         return true;
+    }
+
+    static class AllowedInSourceAdvice{
+
+        @Advice.OnMethodEnter
+        static void allowedInSource(
+        @Advice.This Source.Feature feature,
+        @Advice.Argument(value = 0, readOnly = false) Source source
+        ){
+            switch(feature.name()){
+                case "PRIVATE_SAFE_VARARGS":
+                case "SWITCH_EXPRESSION":
+                case "SWITCH_RULE":
+                case "SWITCH_MULTIPLE_CASE_LABELS":
+                case "LOCAL_VARIABLE_TYPE_INFERENCE":
+                case "VAR_SYNTAX_IMPLICIT_LAMBDAS":
+                case "DIAMOND_WITH_ANONYMOUS_CLASS_CREATION":
+                case "EFFECTIVELY_FINAL_VARIABLES_IN_TRY_WITH_RESOURCES":
+                case "TEXT_BLOCKS":
+                case "PATTERN_MATCHING_IN_INSTANCEOF":
+                case "REIFIABLE_TYPES_INSTANCEOF":
+                //note that records aren't supported here yet, use the original jabel repo for that
+                //case "RECORDS":
+                    //noinspection UnusedAssignment
+                    source = Source.DEFAULT;
+                    break;
+            }
+        }
+    }
+
+    static class CheckSourceLevelAdvice{
+
+        @Advice.OnMethodEnter
+        static void checkSourceLevel(
+        @Advice.Argument(value = 1, readOnly = false) Source.Feature feature
+        ){
+            if(feature.allowedInSource(Source.JDK8)){
+                //noinspection UnusedAssignment
+                feature = Source.Feature.LAMBDA;
+            }
+        }
     }
 }
