@@ -30,13 +30,13 @@ public class JabelCompilerPlugin implements Plugin{
             .field(named("allowRecords"))
             .onRead()
             .replaceWith(
-            (instrumentedType, instrumentedMethod, typePool) ->
-            (targetType, target, parameters, result, freeOffset) ->
-            new StackManipulation.Compound(
-            // remove aload_0
-            Removal.of(targetType),
-            IntegerConstant.forValue(true)
-            )
+                (instrumentedType, instrumentedMethod, typePool) ->
+                    (targetType, target, parameters, result, freeOffset) ->
+                        new StackManipulation.Compound(
+                            // remove aload_0
+                            Removal.of(targetType),
+                            IntegerConstant.forValue(true)
+                        )
             )
             .on(any());
 
@@ -131,7 +131,6 @@ public class JabelCompilerPlugin implements Plugin{
     }
 
     // Make it auto start on Java 14+
-    @Override
     public boolean autoStart(){
         return true;
     }
