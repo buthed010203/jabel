@@ -1,4 +1,4 @@
-plugins {
+plugins{
     id "java"
     id "maven-publish"
 }
@@ -7,34 +7,34 @@ group = 'com.github.Anuken'
 
 sourceCompatibility = targetCompatibility = 8
 
-repositories {
+repositories{
     mavenCentral()
 }
 
-dependencies {
-    implementation 'net.bytebuddy:byte-buddy:1.11.12'
-    implementation 'net.bytebuddy:byte-buddy-agent:1.11.12'
+dependencies{
+    implementation 'net.bytebuddy:byte-buddy:1.11.17'
+    implementation 'net.bytebuddy:byte-buddy-agent:1.11.17'
     implementation 'net.java.dev.jna:jna:5.8.0'
 }
 
 
-task sourcesJar(type: Jar) {
+task sourcesJar(type: Jar){
     classifier 'sources'
     from sourceSets.main.allJava
 }
 
-javadoc {
+javadoc{
     options.source = "8"
 }
 
-task javadocJar(type: Jar) {
+task javadocJar(type: Jar){
     from javadoc
     classifier = 'javadoc'
 }
 
-publishing {
-    publications {
-        mavenJava(MavenPublication) { publication ->
+publishing{
+    publications{
+        mavenJava(MavenPublication){ publication ->
             from components.java
             artifact sourcesJar
             artifact javadocJar
