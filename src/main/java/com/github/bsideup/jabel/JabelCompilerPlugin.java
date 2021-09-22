@@ -1,16 +1,18 @@
 package com.github.bsideup.jabel;
 
 import com.sun.source.util.*;
-import com.sun.tools.javac.api.*;
 import com.sun.tools.javac.code.*;
-import com.sun.tools.javac.util.*;
 import net.bytebuddy.*;
 import net.bytebuddy.agent.*;
 import net.bytebuddy.asm.*;
+import net.bytebuddy.description.field.*;
+import net.bytebuddy.description.method.*;
+import net.bytebuddy.description.type.*;
 import net.bytebuddy.dynamic.*;
 import net.bytebuddy.dynamic.loading.*;
-import net.bytebuddy.implementation.bytecode.*;
-import net.bytebuddy.implementation.bytecode.constant.*;
+import net.bytebuddy.dynamic.scaffold.*;
+import net.bytebuddy.implementation.*;
+import net.bytebuddy.jar.asm.*;
 import net.bytebuddy.pool.*;
 import net.bytebuddy.utility.*;
 
@@ -26,19 +28,7 @@ public class JabelCompilerPlugin implements Plugin{
             .on(named("checkSourceLevel").and(takesArguments(2)));
 
             // Allow features that were introduced together with Records (local enums, static inner members, ...)
-            AsmVisitorWrapper allowRecordsEraFeaturesAdvice = MemberSubstitution.relaxed()
-            .field(named("allowRecords"))
-            .onRead()
-            .replaceWith(
-                (instrumentedType, instrumentedMethod, typePool) ->
-                    (targetType, target, parameters, result, freeOffset) ->
-                        new StackManipulation.Compound(
-                            // remove aload_0
-                            Removal.of(targetType),
-                            IntegerConstant.forValue(true)
-                        )
-            )
-            .on(any());
+            AsmVisitorWrapper allowRecordsEraFeaturesAdvice = new FieldAccessStub("allowRecords", true);
 
             put("com.sun.tools.javac.parser.JavacParser",
             new AsmVisitorWrapper.Compound(
@@ -75,7 +65,8 @@ public class JabelCompilerPlugin implements Plugin{
             );
         }
 
-        ByteBuddy byteBuddy = new ByteBuddy();
+        ByteBuddy byteBuddy = new ByteBuddy()
+            .with(MethodGraph.Compiler.ForDeclaredMethods.INSTANCE);
 
         ClassLoader classLoader = JavacTask.class.getClassLoader();
         ClassFileLocator classFileLocator = ClassFileLocator.ForClassLoader.of(classLoader);
@@ -83,7 +74,7 @@ public class JabelCompilerPlugin implements Plugin{
 
         visitors.forEach((className, visitor) -> {
             byteBuddy
-            .redefine(
+            .decorate(
             typePool.describe(className).resolve(),
             classFileLocator
             )
@@ -111,18 +102,7 @@ public class JabelCompilerPlugin implements Plugin{
 
     @Override
     public void init(JavacTask task, String... args){
-        Context context = ((JavacTaskImpl)task).getContext();
-        JavacMessages.instance(context).add(locale -> new ResourceBundle(){
-            @Override
-            protected Object handleGetObject(String key){
-                return "{0}";
-            }
 
-            @Override
-            public Enumeration<String> getKeys(){
-                return Collections.enumeration(Arrays.asList("missing.desugar.on.record"));
-            }
-        });
     }
 
     @Override
@@ -154,7 +134,7 @@ public class JabelCompilerPlugin implements Plugin{
                 case "TEXT_BLOCKS":
                 case "PATTERN_MATCHING_IN_INSTANCEOF":
                 case "REIFIABLE_TYPES_INSTANCEOF":
-                //note that records aren't supported here yet, use the original jabel repo for that
+                //note that records aren't supported here, use the original jabel repo for that
                 //case "RECORDS":
                     //noinspection UnusedAssignment
                     source = Source.DEFAULT;
@@ -173,6 +153,38 @@ public class JabelCompilerPlugin implements Plugin{
                 //noinspection UnusedAssignment
                 feature = Source.Feature.LAMBDA;
             }
+        }
+    }
+
+    private static class FieldAccessStub extends AsmVisitorWrapper.AbstractBase{
+        final String fieldName;
+
+        final Object value;
+
+        public FieldAccessStub(String fieldName, Object value){
+            this.fieldName = fieldName;
+            this.value = value;
+        }
+
+        @Override
+        public ClassVisitor wrap(TypeDescription instrumentedType, ClassVisitor classVisitor, Implementation.Context implementationContext, TypePool typePool, FieldList<FieldDescription.InDefinedShape> fields, MethodList<?> methods, int writerFlags, int readerFlags){
+            return new ClassVisitor(Opcodes.ASM9, classVisitor){
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions){
+                    MethodVisitor methodVisitor = super.visitMethod(access, name, descriptor, signature, exceptions);
+                    return new MethodVisitor(Opcodes.ASM9, methodVisitor){
+                        @Override
+                        public void visitFieldInsn(int opcode, String owner, String name, String descriptor){
+                            if(opcode == Opcodes.GETFIELD && fieldName.equalsIgnoreCase(name)){
+                                super.visitInsn(Opcodes.POP);
+                                super.visitLdcInsn(value);
+                            }else{
+                                super.visitFieldInsn(opcode, owner, name, descriptor);
+                            }
+                        }
+                    };
+                }
+            };
         }
     }
 }
