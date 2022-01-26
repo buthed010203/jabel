@@ -12,9 +12,9 @@ repositories{
 }
 
 dependencies{
-    implementation 'net.bytebuddy:byte-buddy:1.11.17'
-    implementation 'net.bytebuddy:byte-buddy-agent:1.11.17'
-    implementation 'net.java.dev.jna:jna:5.8.0'
+    implementation 'net.bytebuddy:byte-buddy:1.12.7'
+    implementation 'net.bytebuddy:byte-buddy-agent:1.12.7'
+    implementation 'net.java.dev.jna:jna:5.10.0'
 }
 
 
